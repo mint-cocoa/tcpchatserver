@@ -2,7 +2,6 @@
 #include <liburing.h>
 #include <memory>
 #include "Context.h"
-
 class IOUringManager {
 public:
     static constexpr unsigned NUM_ENTRIES = 256;

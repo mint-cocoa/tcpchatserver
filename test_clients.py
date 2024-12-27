@@ -120,14 +120,19 @@ class ClientTester:
     def start_client(self, client_id: int) -> subprocess.Popen:
         self.print_colored(Colors.YELLOW, f"클라이언트 {client_id} 시작")
         try:
+            # 환경 변수 설정으로 버퍼링 비활성화
+            env = os.environ.copy()
+            env['PYTHONUNBUFFERED'] = '1'
+            
             process = subprocess.Popen(
                 [self.client_binary, self.host, str(self.port)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                bufsize=1,
-                universal_newlines=True
+                bufsize=0,  # 버퍼링 비활성화
+                universal_newlines=True,
+                env=env
             )
             time.sleep(0.1)
             if process.poll() is not None:
@@ -154,32 +159,48 @@ class ClientTester:
 
     def read_output(self, process: subprocess.Popen, client_id: int):
         session_id = self.client_sessions.get(client_id)
-        while self.running:
-            output = process.stdout.readline()
-            if output:
-                output = output.strip()
-                if session_id:
-                    if "test_message_" in output:
-                        try:
-                            message_id = int(output.split("test_message_")[1].split()[0])
-                            self.stats.record_received(session_id, message_id)
-                        except (IndexError, ValueError):
-                            pass
+        while self.running and process.poll() is None:
+            try:
+                output = process.stdout.readline()
+                if not output and process.poll() is not None:
+                    break
                     
-                    color = self.get_session_color(session_id)
-                    with self.message_lock:
-                        self.session_messages[session_id].append(
-                            f"[클라이언트 {client_id}] {output}"
-                        )
-                        if len(self.session_messages[session_id]) > 100:
-                            self.session_messages[session_id].pop(0)
-                    self.print_colored(color, f"[세션 {session_id}] 클라이언트 {client_id}: {output}")
-                else:
-                    print(f"클라이언트 {client_id}: {output}")
-            
-            error = process.stderr.readline()
-            if error:
-                self.print_colored(Colors.RED, f"클라이언트 {client_id} 에러: {error.strip()}")
+                if output:
+                    output = output.strip()
+                    if session_id:
+                        if "test_message_" in output:
+                            try:
+                                message_parts = output.split("test_message_")
+                                if len(message_parts) >= 2:
+                                    message_id = int(message_parts[1].split()[0])
+                                    self.stats.record_received(session_id, message_id)
+                                    color = self.get_session_color(session_id)
+                                    self.print_colored(color, f"[세션 {session_id}] 메시지 수신 확인: {message_id}")
+                            except (IndexError, ValueError) as e:
+                                self.print_colored(Colors.RED, f"메시지 파싱 오류: {str(e)}")
+                        
+                        color = self.get_session_color(session_id)
+                        with self.message_lock:
+                            self.session_messages[session_id].append(
+                                f"[클라이언트 {client_id}] {output}"
+                            )
+                            if len(self.session_messages[session_id]) > 100:
+                                self.session_messages[session_id].pop(0)
+                        self.print_colored(color, f"[세션 {session_id}] 클라이언트 {client_id}: {output}")
+                    else:
+                        print(f"클라이언트 {client_id}: {output}")
+                
+                error = process.stderr.readline()
+                if error:
+                    error = error.strip()
+                    if error:
+                        self.print_colored(Colors.RED, f"클라이언트 {client_id} 에러: {error}")
+                        
+            except Exception as e:
+                self.print_colored(Colors.RED, f"출력 읽기 오류 (클라이언트 {client_id}): {str(e)}")
+                break
+                
+        self.print_colored(Colors.YELLOW, f"클라이언트 {client_id} 출력 모니터링 종료")
 
     def message_sender(self):
         while self.running:
@@ -339,7 +360,7 @@ class ClientTester:
                 print(f"  수신: {session_stats['received']}")
                 if session_stats['latencies']:
                     avg_latency = statistics.mean(session_stats['latencies'])
-                    print(f"  평균 지��: {avg_latency:.2f}ms")
+                    print(f"  평균 지연: {avg_latency:.2f}ms")
             print("=====================")
 
 def main():

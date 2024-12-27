@@ -6,6 +6,7 @@
 #include <iostream>
 #include <csignal>
 #include <unordered_map>
+#include <unordered_set>
 #include <cstring>
 
 static bool running = true;
@@ -15,7 +16,7 @@ struct ClientInfo {
     int32_t sessionId = -1;
     std::string status = "online";
     bool isTyping = false;
-    std::unordered_set<uint64_t> readMessages;
+    std::unordered_set<uint64_t> readMessages{};
 };
 
 // 전역 클라이언트 정보 관리
@@ -50,10 +51,7 @@ int main() {
     
         // 테스트용 세션 생성
         auto& sessionManager = SessionManager::getInstance();
-        for (int i = 1; i <= 4; i++) {
-            sessionManager.createSession(i);
-        }
-
+    
         // 리스닝 소켓 생성
         const int port = 8080;
         int listen_fd = socket_manager.createListeningSocket(port);
@@ -109,17 +107,7 @@ int main() {
                             SessionManager::getInstance().removeSession(ctx.client_fd);
                             
                             // 다른 클라이언트들에게 퇴장 알림
-                            std::string leave_msg = "User " + std::to_string(ctx.client_fd) + " disconnected";
-                            auto clients = SessionManager::getInstance().getSessionClients(info.sessionId);
-                            for (int32_t target_fd : clients) {
-                                if (target_fd != ctx.client_fd) {
-                                    ChatMessage msg{};
-                                    msg.type = MessageType::SERVER_NOTIFICATION;
-                                    msg.length = leave_msg.length();
-                                    std::memcpy(msg.data, leave_msg.c_str(), msg.length);
-                                    io_uring_manager.prepareWrite(target_fd, &msg, sizeof(ChatMessage), ctx.buffer_idx);
-                                }
-                            }
+        
                         }
                         
                         // 클라이언트 정보 제거

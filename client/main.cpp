@@ -18,16 +18,22 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // 출력 버퍼링 비활성화
+    std::cout.setf(std::ios::unitbuf);
+    setvbuf(stdout, nullptr, _IONBF, 0);
+
     ChatClient client;
     std::atomic<bool> running(true);
 
     // 콜백 설정
     client.setMessageCallback([](const std::string& msg) {
-        std::cout << msg << std::endl;
+        // 수신된 메시지를 즉시 출력 (버퍼링 없이)
+        std::cout << msg << std::flush;
     });
 
     client.setNotificationCallback([](const std::string& notification) {
-        std::cout << "알림: " << notification << std::endl;
+        // 알림도 즉시 출력
+        std::cout << "알림: " << notification << std::flush;
     });
 
     // 서버 연결
@@ -36,7 +42,7 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "채팅 클라이언트가 시작되었습니다.\n"
-              << "명령어 목록을 보려면 /help를 입력하세요." << std::endl;
+              << "명령어 목록을 보려면 /help를 입력하세요." << std::flush;
 
     std::string input;
     while (running && std::getline(std::cin, input)) {
@@ -54,15 +60,20 @@ int main(int argc, char* argv[]) {
                     int sessionId = std::stoi(cmd.substr(5));
                     client.joinSession(sessionId);
                 } catch (...) {
-                    std::cout << "잘못된 세션 ID 형식입니다." << std::endl;
+                    std::cout << "잘못된 세션 ID 형식입니다." << std::flush;
                 }
             } else if (cmd == "leave") {
                 client.leaveSession();
             } else {
-                std::cout << "알 수 없는 명령어입니다. /help를 입력하여 도움말을 확인하세요." << std::endl;
+                std::cout << "알 수 없는 명령어입니다. /help를 입력하여 도움말을 확인하세요." << std::flush;
             }
         } else {
-            client.sendChat(input);
+            // test_message_ 형식으로 전송
+            if (input.find("test_message_") == 0) {
+                client.sendChat(input);
+            } else {
+                client.sendChat("test_message_" + input);
+            }
         }
     }
 

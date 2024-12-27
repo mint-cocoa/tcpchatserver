@@ -5,6 +5,7 @@
 #include "IOUringManager.h"
 #include <string>
 #include <vector>
+#include <atomic>
 
 class EventHandler {
 public:
@@ -17,6 +18,8 @@ public:
 private:
     BufferManager& buffer_manager_;
     IOUringManager& io_manager_;
+    std::atomic<uint64_t> total_broadcasts_{0};  // 총 브로드캐스트 메시지 수
+    std::atomic<uint64_t> total_messages_{0};    // 총 전송 메시지 수
 
     void processMessage(int client_fd, const ChatMessage* message, uint16_t buffer_idx);
     
@@ -28,4 +31,7 @@ private:
     // 유틸리티 메서드
     void sendMessage(int client_fd, MessageType msg_type, const void* data, size_t length, uint16_t buffer_idx);
     void broadcastToSession(int32_t session_id, MessageType msg_type, const void* data, size_t length, uint16_t buffer_idx, int32_t exclude_fd = -1);
+    
+    // 로깅 유틸리티
+    void logMessageStats() const;
 }; 

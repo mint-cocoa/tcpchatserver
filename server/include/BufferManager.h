@@ -19,6 +19,9 @@ enum class LogLevel {
     ERROR
 };
 
+
+
+
 class BufferLogger {
 public:
     static BufferLogger& getInstance() {
@@ -100,7 +103,6 @@ struct BufferInfo {
     uint64_t bytes_used{0};               // 현재 사용 중인 바이트 수
     uint64_t total_uses{0};               // 총 사용 횟수
     uint32_t ref_count{0};               // 레퍼런스 카운트
-    mutable std::mutex ref_mutex;         // 레퍼런스 카운트 보호용 뮤텍스
 
     BufferInfo() = default;
     BufferInfo(const BufferInfo&) = delete;
@@ -112,8 +114,8 @@ struct BufferInfo {
 class BufferManager {
 public:
     // 상수 정의
-    static constexpr uint32_t IO_BUFFER_SIZE = 8192;  // 8KB
-    static constexpr uint16_t NUM_BUFFERS = 256;      // 버퍼 개수
+    static constexpr uint32_t IO_BUFFER_SIZE = 2048;  // 8KB
+    static constexpr uint16_t NUM_IO_BUFFERS = 4096;      // 버퍼 개수
 
     // 생성자 및 소멸자
     explicit BufferManager(io_uring* ring);
@@ -121,8 +123,8 @@ public:
 
     // 버퍼 관리 메서드
     void markBufferInUse(uint16_t idx, uint16_t client_fd);  // completion queue에서 사용된 버퍼 표시
-    void releaseBuffer(uint16_t idx);                        // 버퍼 사용 완료 표시
-    uint8_t* getBufferAddr(uint16_t idx);                   // 버퍼 주소 반환
+    void releaseBuffer(uint16_t idx, uint8_t* buf_base_addr);                        // 버퍼 사용 완료 표시
+    uint8_t* getBufferAddr(uint16_t idx, uint8_t* buf_base_addr);                   // 버퍼 주소 반환
     void updateBufferBytes(uint16_t idx, uint64_t bytes);   // 버퍼 사용량 업데이트
     void printBufferStatus(uint16_t highlight_idx = UINT16_MAX); // 버퍼 상태 출력
     
@@ -133,6 +135,9 @@ public:
     double getBufferUsageTime(uint16_t idx) const;
     void printBufferStats() const;
     uint16_t findClientBuffer(uint16_t client_fd) const;
+    
+    // 버퍼 기본 주소 반환
+    uint8_t* getBaseAddr() const { return buffer_base_addr_; }
 
     // 로그 관련 메서드
     void setLogFile(const std::string& filename) {

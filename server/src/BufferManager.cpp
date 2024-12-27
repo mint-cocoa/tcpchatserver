@@ -26,20 +26,20 @@ template <unsigned N> constexpr unsigned log2() {
 }
 
 static constexpr unsigned buffer_ring_size() {
-    return (BufferManager::IO_BUFFER_SIZE + sizeof(io_uring_buf)) * BufferManager::NUM_BUFFERS;
+    return (BufferManager::IO_BUFFER_SIZE + sizeof(io_uring_buf)) * BufferManager::NUM_IO_BUFFERS;
 }
 
 static uint8_t* get_buffer_base_addr(void* ring_addr) {
-    return static_cast<uint8_t*>(ring_addr) + (sizeof(io_uring_buf) * BufferManager::NUM_BUFFERS);
+    return static_cast<uint8_t*>(ring_addr) + (sizeof(io_uring_buf) * BufferManager::NUM_IO_BUFFERS);
 }
 
-uint8_t* BufferManager::getBufferAddr(uint16_t idx) {
-    return buffer_base_addr_ + (idx << log2<BufferManager::IO_BUFFER_SIZE>());
+uint8_t* BufferManager::getBufferAddr(uint16_t idx, uint8_t* buf_base_addr) {
+    return buf_base_addr + (idx << log2<BufferManager::IO_BUFFER_SIZE>());
 }
 
 BufferManager::BufferManager(io_uring* ring) 
     : ring_(ring), buf_ring_(nullptr), buffer_base_addr_(nullptr), ring_size_(buffer_ring_size()),
-      buffers_(NUM_BUFFERS) {
+      buffers_(NUM_IO_BUFFERS) {
     initBufferRing();
 }
 
@@ -61,7 +61,7 @@ void BufferManager::initBufferRing() {
 
     io_uring_buf_reg reg{};
     reg.ring_addr = reinterpret_cast<__u64>(ring_addr);
-    reg.ring_entries = NUM_BUFFERS;
+    reg.ring_entries = NUM_IO_BUFFERS;
     reg.bgid = 1;  // Buffer group ID
 
     if (io_uring_register_buf_ring(ring_, &reg, 0) < 0) {
@@ -76,7 +76,7 @@ void BufferManager::initBufferRing() {
     buffer_base_addr_ = get_buffer_base_addr(ring_addr);
 
     // 버퍼 정보 초기화
-    for (uint16_t i = 0; i < NUM_BUFFERS; ++i) {
+    for (uint16_t i = 0; i < NUM_IO_BUFFERS; ++i) {
         buffers_[i].in_use = false;
         buffers_[i].client_fd = 0;
         buffers_[i].allocation_time = std::chrono::steady_clock::now();
@@ -86,57 +86,53 @@ void BufferManager::initBufferRing() {
         
         // 버퍼를 io_uring에 등록
         io_uring_buf_ring_add(buf_ring_, 
-                             getBufferAddr(i), 
+                             getBufferAddr(i, buffer_base_addr_), 
                              IO_BUFFER_SIZE, 
                              i,
-                             io_uring_buf_ring_mask(NUM_BUFFERS), 
+                             io_uring_buf_ring_mask(NUM_IO_BUFFERS), 
                              i);
     }
-    io_uring_buf_ring_advance(buf_ring_, NUM_BUFFERS);
+    io_uring_buf_ring_advance(buf_ring_, NUM_IO_BUFFERS);
     
-    logInfo("Buffer ring initialized with " + std::to_string(NUM_BUFFERS) + " buffers");
+    logInfo("Buffer ring initialized with " + std::to_string(NUM_IO_BUFFERS) + " buffers");
 }
 
 void BufferManager::incrementRefCount(uint16_t idx) {
-    if (idx >= NUM_BUFFERS) return;
+    if (idx >= NUM_IO_BUFFERS) return;
     
-    std::lock_guard<std::mutex> lock(buffers_[idx].ref_mutex);
     buffers_[idx].ref_count++;
     logDebug("Buffer " + std::to_string(idx) + " ref count increased to " + 
              std::to_string(buffers_[idx].ref_count));
 }
 
 void BufferManager::decrementRefCount(uint16_t idx) {
-    if (idx >= NUM_BUFFERS) return;
+    if (idx >= NUM_IO_BUFFERS) return;
     
-    std::lock_guard<std::mutex> lock(buffers_[idx].ref_mutex);
     if (buffers_[idx].ref_count > 0) {
         buffers_[idx].ref_count--;
         logDebug("Buffer " + std::to_string(idx) + " ref count decreased to " + 
                  std::to_string(buffers_[idx].ref_count));
         
         if (buffers_[idx].ref_count == 0 && buffers_[idx].in_use) {
-            releaseBuffer(idx);
+            logDebug("Calling releaseBuffer for buffer " + std::to_string(idx));
+            releaseBuffer(idx, buffer_base_addr_);
         }
     }
 }
 
 uint32_t BufferManager::getRefCount(uint16_t idx) const {
-    if (idx >= NUM_BUFFERS) return 0;
-    
-    std::lock_guard<std::mutex> lock(buffers_[idx].ref_mutex);
+    if (idx >= NUM_IO_BUFFERS) return 0;
     return buffers_[idx].ref_count;
 }
 
 void BufferManager::markBufferInUse(uint16_t idx, uint16_t client_fd) {
-    if (idx >= NUM_BUFFERS) return;
+    if (idx >= NUM_IO_BUFFERS) return;
     
-    std::lock_guard<std::mutex> lock(buffers_[idx].ref_mutex);
     buffers_[idx].in_use = true;
     buffers_[idx].client_fd = client_fd;
     buffers_[idx].allocation_time = std::chrono::steady_clock::now();
     buffers_[idx].total_uses++;
-    buffers_[idx].ref_count = 1;  // 초기 레퍼런스 카운트 설정
+  
     
     client_buffers_[client_fd] = idx;
     
@@ -144,37 +140,43 @@ void BufferManager::markBufferInUse(uint16_t idx, uint16_t client_fd) {
             std::to_string(client_fd));
 }
 
-void BufferManager::releaseBuffer(uint16_t idx) {
-    if (idx >= NUM_BUFFERS) return;
-    
-    std::lock_guard<std::mutex> lock(buffers_[idx].ref_mutex);
-    if (buffers_[idx].in_use) {
-        if (buffers_[idx].ref_count > 0) {
-            logDebug("Buffer " + std::to_string(idx) + " release delayed, ref count: " + 
-                     std::to_string(buffers_[idx].ref_count));
-            return;
-        }
-        
-        buffers_[idx].in_use = false;
-        client_buffers_.erase(buffers_[idx].client_fd);
-        buffers_[idx].client_fd = 0;
-        buffers_[idx].bytes_used = 0;
-        
-        // 버퍼 링에 반환
-        io_uring_buf_ring_add(buf_ring_, 
-                            buffer_base_addr_ + (idx * IO_BUFFER_SIZE), 
-                            IO_BUFFER_SIZE, 
-                            idx, 
-                            ring_mask_, 
-                            idx);
-        io_uring_buf_ring_advance(buf_ring_, 1);
-        
-        logInfo("Buffer " + std::to_string(idx) + " released");
+void BufferManager::releaseBuffer(uint16_t idx, uint8_t* buf_base_addr) {
+    if (idx >= NUM_IO_BUFFERS) {
+        logError("Invalid buffer index in releaseBuffer: " + std::to_string(idx));
+        return;
     }
+    
+    // 이미 해제된 버퍼인지 확인
+    if (!buffers_[idx].in_use) {
+        logWarning("Attempting to release already released buffer: " + std::to_string(idx));
+        return;
+    }
+    
+    // ref_count가 0이 아닌 경우 해제하지 않음
+    if (buffers_[idx].ref_count > 0) {
+        logDebug("Buffer " + std::to_string(idx) + " release delayed, ref count: " + 
+                 std::to_string(buffers_[idx].ref_count));
+        return;
+    }
+    
+    logDebug("Starting to release buffer " + std::to_string(idx));
+    
+    // 버퍼 정보 초기화
+    buffers_[idx].in_use = false;
+    client_buffers_.erase(buffers_[idx].client_fd);
+    buffers_[idx].client_fd = 0;
+    buffers_[idx].bytes_used = 0;
+    
+    io_uring_buf_ring_add(buf_ring_, getBufferAddr(idx, buffer_base_addr_),IO_BUFFER_SIZE, idx,
+                          io_uring_buf_ring_mask(NUM_IO_BUFFERS), /* buf_offset */ 0);
+    // Make the buffer visible to the kernel
+    io_uring_buf_ring_advance(buf_ring_, 1);
+    
+    logInfo("Buffer " + std::to_string(idx) + " successfully released");
 }
 
 void BufferManager::updateBufferBytes(uint16_t idx, uint64_t bytes) {
-    if (idx >= NUM_BUFFERS) {
+    if (idx >= NUM_IO_BUFFERS) {
         logError("Attempting to update invalid buffer index: " + std::to_string(idx));
         return;
     }
@@ -202,7 +204,7 @@ void BufferManager::updateBufferBytes(uint16_t idx, uint64_t bytes) {
         ss << "Buffer " << idx << " overflow: " << bytes << "/" << IO_BUFFER_SIZE 
            << "B (client: " << buffers_[idx].client_fd << ")";
         logWarning(ss.str());
-    } else if (bytes > (IO_BUFFER_SIZE * 0.9)) {  // 90% 이상 용
+    } else if (bytes > (IO_BUFFER_SIZE * 0.9)) {  // 90% 이상 
         std::stringstream ss;
         ss << "Buffer " << idx << " near capacity: " << bytes << "/" << IO_BUFFER_SIZE 
            << "B (client: " << buffers_[idx].client_fd << ")";
@@ -211,19 +213,19 @@ void BufferManager::updateBufferBytes(uint16_t idx, uint64_t bytes) {
 }
 
 bool BufferManager::isBufferInUse(uint16_t idx) const {
-    return idx < NUM_BUFFERS && buffers_[idx].in_use;
+    return idx < NUM_IO_BUFFERS && buffers_[idx].in_use;
 }
 
 uint16_t BufferManager::getBufferClient(uint16_t idx) const {
-    return idx < NUM_BUFFERS ? buffers_[idx].client_fd : 0;
+    return idx < NUM_IO_BUFFERS ? buffers_[idx].client_fd : 0;
 }
 
 uint64_t BufferManager::getBufferBytesUsed(uint16_t idx) const {
-    return idx < NUM_BUFFERS ? buffers_[idx].bytes_used : 0;
+    return idx < NUM_IO_BUFFERS ? buffers_[idx].bytes_used : 0;
 }
 
 double BufferManager::getBufferUsageTime(uint16_t idx) const {
-    if (idx >= NUM_BUFFERS || !buffers_[idx].in_use) {
+    if (idx >= NUM_IO_BUFFERS || !buffers_[idx].in_use) {
         return 0.0;
     }
     auto now = std::chrono::steady_clock::now();
@@ -243,11 +245,11 @@ void BufferManager::printBufferStatus(uint16_t highlight_idx) {
                                  [](const BufferInfo& info) { return info.in_use; });
     
     std::stringstream ss;
-    ss << "Buffer Status Update - Using: " << used_count << "/" << NUM_BUFFERS;
+    ss << "Buffer Status Update - Using: " << used_count << "/" << NUM_IO_BUFFERS;
     logInfo(ss.str());
     
     // 하이라이트된 버퍼 정보 출력
-    if (highlight_idx < NUM_BUFFERS) {
+    if (highlight_idx < NUM_IO_BUFFERS) {
         const auto& info = buffers_[highlight_idx];
         std::stringstream buf_ss;
         buf_ss << "Buffer " << highlight_idx << " details:"
@@ -262,7 +264,7 @@ void BufferManager::printBufferStatus(uint16_t highlight_idx) {
     std::stringstream active_ss;
     active_ss << "Active buffers: ";
     bool first = true;
-    for (uint16_t i = 0; i < NUM_BUFFERS; ++i) {
+    for (uint16_t i = 0; i < NUM_IO_BUFFERS; ++i) {
         if (buffers_[i].in_use) {
             if (!first) active_ss << ", ";
             active_ss << i << "(" << buffers_[i].client_fd << ")";
@@ -285,16 +287,16 @@ void BufferManager::printBufferStats() const {
     }
     
     ss << "\n=== Buffer Pool Statistics ===\n"
-       << "Total buffers: " << NUM_BUFFERS << "\n"
+       << "Total buffers: " << NUM_IO_BUFFERS << "\n"
        << "In use: " << used_count << "\n"
-       << "Total memory: " << (NUM_BUFFERS * IO_BUFFER_SIZE / 1024) << "KB\n"
+       << "Total memory: " << (NUM_IO_BUFFERS * IO_BUFFER_SIZE / 1024) << "KB\n"
        << "Used memory: " << (total_bytes / 1024) << "KB\n"
        << "Total allocations: " << total_uses;
     
     logInfo(ss.str());
     
     // 활성 버퍼 상세 정보
-    for (uint16_t i = 0; i < NUM_BUFFERS; ++i) {
+    for (uint16_t i = 0; i < NUM_IO_BUFFERS; ++i) {
         const auto& info = buffers_[i];
         if (info.in_use) {
             std::stringstream buf_ss;

@@ -44,3 +44,18 @@ target_link_libraries(server PRIVATE server_lib)
 add_executable(client client/main.cpp)
 target_link_libraries(client PRIVATE client_lib)
 
+# 벤치마크 실행 파일 추가
+add_executable(benchmark
+    client/benchmark.cpp
+    client/src/ChatClient.cpp
+)
+
+target_include_directories(benchmark PRIVATE
+    client/include
+    server/include
+)
+
+target_link_libraries(benchmark PRIVATE
+    pthread
+)
+
