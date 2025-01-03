@@ -1,5 +1,8 @@
 #pragma once
+#include <liburing.h>
 #include <cstdint>
+
+#pragma pack(push, 1)  // 1바이트 정렬 시작
 
 enum class MessageType : uint8_t {
     // 서버 메시지 (0x00 ~ 0x0F)
@@ -35,3 +38,7 @@ struct ChatMessage {
     uint16_t length;         // 2 bytes
     char data[512];          // 512 bytes
 };
+
+#pragma pack(pop)   // 정렬 설정 복원
+
+static constexpr size_t MAX_MESSAGE_SIZE = 4096;  // 4KB

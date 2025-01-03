@@ -6,7 +6,6 @@
 
 void printHelp() {
     std::cout << "\n사용 가능한 명령어:\n"
-              << "/join <세션ID> - 채팅방 참가\n"
               << "/leave - 채팅방 나가기\n"
               << "/quit - 프로그램 종료\n"
               << "/help - 도움말 보기\n" << std::endl;
@@ -31,10 +30,6 @@ int main(int argc, char* argv[]) {
         std::cout << msg << std::flush;
     });
 
-    client.setNotificationCallback([](const std::string& notification) {
-        // 알림도 즉시 출력
-        std::cout << "알림: " << notification << std::flush;
-    });
 
     // 서버 연결
     if (!client.connect(argv[1], std::stoi(argv[2]))) {
@@ -55,13 +50,6 @@ int main(int argc, char* argv[]) {
                 break;
             } else if (cmd == "help") {
                 printHelp();
-            } else if (cmd.substr(0, 4) == "join") {
-                try {
-                    int sessionId = std::stoi(cmd.substr(5));
-                    client.joinSession(sessionId);
-                } catch (...) {
-                    std::cout << "잘못된 세션 ID 형식입니다." << std::flush;
-                }
             } else if (cmd == "leave") {
                 client.leaveSession();
             } else {

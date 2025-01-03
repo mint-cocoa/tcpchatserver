@@ -11,7 +11,7 @@ NC='\033[0m' # No Color
 CLIENT_COUNT=4
 PORT=8080
 HOST="localhost"
-CLIENT_BINARY="./cmake-build-debug/client"
+CLIENT_BINARY="./build/chat_client"
 SESSION_COUNT=1 # 테스트할 세션 수
 
 # 사용법 출력 함수

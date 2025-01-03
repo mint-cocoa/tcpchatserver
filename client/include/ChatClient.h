@@ -2,8 +2,6 @@
 #include "Context.h"
 #include <string>
 #include <functional>
-#include <thread>
-#include <atomic>
 
 class ChatClient {
 public:
@@ -20,20 +18,16 @@ public:
     
     // 콜백 설정
     using MessageCallback = std::function<void(const std::string&)>;
-    using NotificationCallback = std::function<void(const std::string&)>;
     
     void setMessageCallback(MessageCallback callback) { messageCallback_ = callback; }
-    void setNotificationCallback(NotificationCallback callback) { notificationCallback_ = callback; }
 
 private:
     int socket_;
-    std::atomic<bool> running_;
-    std::thread receiveThread_;
-    
+    bool running_;
+ 
     MessageCallback messageCallback_;
-    NotificationCallback notificationCallback_;
     
-    void receiveLoop();
+    void mainLoop();
     bool sendMessage(MessageType type, const void* data, size_t length);
     void handleMessage(const ChatMessage& message);
 }; 

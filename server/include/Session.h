@@ -1,32 +1,35 @@
 #pragma once
-#include <cstdint>
+#include "IOUring.h"
+#include <set>
 #include <memory>
-#include <string>
-#include <unordered_map>
+#include <thread>
+#include "Context.h"
 
 class Session {
 public:
-    explicit Session(int32_t clientFd) : clientFd(clientFd), sessionId(-1) {}
+    static constexpr unsigned CQE_BATCH_SIZE = 32;  // 한 번에 처리할 최대 이벤트 수
     
-    int32_t getClientFd() const { return clientFd; }
-    int32_t getSessionId() const { return sessionId; }
-    std::string getSessionName() const { return sessionName; }
+    explicit Session(int32_t id);
+    ~Session();
     
-    void setSessionId(int32_t id) { sessionId = id; }
-    void setSessionName(const std::string& name) { sessionName = name; }
+    void processEvent(io_uring_cqe* cqe);  // 단일 이벤트 처리
     
-    void setData(const std::string& key, const std::string& value) {
-        sessionData[key] = value;
-    }
+    int32_t getSessionId() const { return session_id_; }
+    IOUring* getIOUring() { return io_ring_.get(); }
+    const std::set<int32_t>& getClients() const { return clients_; }
     
-    std::string getData(const std::string& key) const {
-        auto it = sessionData.find(key);
-        return (it != sessionData.end()) ? it->second : "";
-    }
+    void addClient(int32_t client_fd);
+    void removeClient(int32_t client_fd) { clients_.erase(client_fd); }
+    size_t getClientCount() const { return clients_.size(); }
     
+    void setListeningSocket(int socket_fd);
+
 private:
-    int32_t clientFd;
-    int32_t sessionId;
-    std::string sessionName;
-    std::unordered_map<std::string, std::string> sessionData;
+    void handleRead(io_uring_cqe* cqe, const Operation& ctx);
+    void handleWrite(io_uring_cqe* cqe, const Operation& ctx);
+    void handleClose(int client_fd);
+
+    int32_t session_id_;
+    std::unique_ptr<IOUring> io_ring_;
+    std::set<int32_t> clients_;
 }; 
